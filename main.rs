@@ -13,6 +13,25 @@ struct Operator {
     index: usize,
 }
 
+impl Operator {
+    fn creation(index: usize) -> Operator {
+        Operator { op: OpType::Creation, index }
+    }
+
+    fn annihilation(index: usize) -> Operator {
+        Operator { op: OpType::Annihilation, index }
+    }
+}
+
+impl std::fmt::Debug for Operator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.op {
+            OpType::Annihilation => write!(f, "a({})", self.index),
+            OpType::Creation     => write!(f, "a+({})", self.index),
+        }
+    }
+}
+
 impl Ord for Operator {
     /// Rule 1: Creation < Annihilation (so creations are "to the left")
     /// Rule 2: within the same kind:
@@ -40,16 +59,43 @@ struct Term {
     ops: Vec<Operator>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Expression {
-    terms: Vec<Term>,
+impl Term {
+    fn one_body(i: usize, j: usize) -> Term {
+        Term {
+            coeff: 1,
+            ops: vec![
+                Operator::creation(i),
+                Operator::annihilation(j),
+            ],
+        }
+    }
+
+    fn two_body(i: usize, j: usize, k: usize, l: usize) -> Term {
+        Term {
+            coeff: 1,
+            ops: vec![
+                Operator::creation(i),
+                Operator::creation(j),
+                Operator::annihilation(l),
+                Operator::annihilation(k),
+            ],
+        }
+    }
+
+    fn density(i: usize) -> Term {
+        Term::one_body(i, i)
+    }
 }
 
-impl std::fmt::Debug for Operator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.op {
-            OpType::Annihilation => write!(f, "a({})", self.index),
-            OpType::Creation     => write!(f, "a+({})", self.index),
+impl std::ops::Mul for Term {
+    type Output = Term;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        let mut new_ops = self.ops.clone();
+        new_ops.extend_from_slice(&rhs.ops);
+        Term {
+            coeff: self.coeff * rhs.coeff,
+            ops: new_ops,
         }
     }
 }
@@ -60,12 +106,14 @@ impl std::fmt::Debug for Term {
     }
 }
 
-fn creation(index: usize) -> Operator {
-    Operator { op: OpType::Creation, index }
-}
+type Expression = Vec<Term>;
 
-fn annihilation(index: usize) -> Operator {
-    Operator { op: OpType::Annihilation, index }
+impl std::ops::Add for Term {
+    type Output = Expression;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        vec![self, rhs]
+    }
 }
 
 /// Rule for commutation:
@@ -147,9 +195,9 @@ fn main() {
     let input = Term {
         coeff: 1, 
         ops: vec![
-            // creation(1),
-            annihilation(1),
-            creation(1),
+            Operator::creation(1),
+            Operator::annihilation(1),
+            Operator::creation(1),
     ]};
 
     let result = normal_order(input.clone());
@@ -161,10 +209,10 @@ fn main() {
 
     let input2 = Term {coeff: 1, 
         ops: vec![
-        annihilation(1),
-        annihilation(1),
-        creation(1),
-        creation(1),
+        Operator::annihilation(1),
+        Operator::annihilation(2),
+        Operator::creation(2),
+        Operator::creation(1),
     ]};
 
     println!("\nInput 2: {:?}", input2);
@@ -177,13 +225,13 @@ fn main() {
     let input3 = vec![
         Term {coeff: 1, 
         ops: vec![
-            annihilation(2),
-            creation(1),
+            Operator::annihilation(2),
+            Operator::creation(1),
         ]},
         Term {coeff: 1, 
         ops: vec![
-            creation(1),
-            annihilation(2),
+            Operator::creation(1),
+            Operator::annihilation(2),
         ]},
     ];
 
@@ -192,4 +240,14 @@ fn main() {
     for term in result3 {
         println!("{:?}", term);
     }
+
+    let a1 = Term::density(1);
+    let b1 = Term::density(2);
+    let input4 = a1 * b1;
+    println!("\nInput 4: {:?}", input4);
+
+    let a2 = Term::density(2);
+    let b2 = Term::density(2);
+    let input5 = a2 + b2;
+    println!("\nInput 5: {:?}", input5);
 }
