@@ -54,16 +54,16 @@ impl PartialOrd for Operator {
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 struct Term {
-    coeff: i64,
+    coeff: f32,
     ops: Vec<Operator>,
 }
 
 impl Term {
     fn one_body(i: usize, j: usize) -> Term {
         Term {
-            coeff: 1,
+            coeff: 1.0,
             ops: vec![
                 Operator::creation(i),
                 Operator::annihilation(j),
@@ -73,7 +73,7 @@ impl Term {
 
     fn two_body(i: usize, j: usize, k: usize, l: usize) -> Term {
         Term {
-            coeff: 1,
+            coeff: 1.0,
             ops: vec![
                 Operator::creation(i),
                 Operator::creation(j),
@@ -94,7 +94,7 @@ impl std::fmt::Debug for Term {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 struct Expression(Vec<Term>);
 
 impl Expression {
@@ -116,11 +116,11 @@ impl std::fmt::Debug for Expression {
 }
 
 /// Implementations of Add and Mul for Term and Expression
-/// Term + i64
-impl Add<i64> for Term {
+/// Term + f32
+impl Add<f32> for Term {
     type Output = Expression;
 
-    fn add(self, rhs: i64) -> Self::Output {
+    fn add(self, rhs: f32) -> Self::Output {
         let constant_term = Term {
             coeff: rhs,
             ops: vec![],
@@ -129,8 +129,8 @@ impl Add<i64> for Term {
     }
 }
 
-/// i64 + Term
-impl Add<Term> for i64 {
+/// f32 + Term
+impl Add<Term> for f32 {
     type Output = Expression;
 
     fn add(self, rhs: Term) -> Self::Output {
@@ -151,11 +151,11 @@ impl Add<Term> for Term {
     }
 }
 
-/// Expression + i64
-impl Add<i64> for Expression {
+/// Expression + f32
+impl Add<f32> for Expression {
     type Output = Expression;
 
-    fn add(self, rhs: i64) -> Self::Output {
+    fn add(self, rhs: f32) -> Self::Output {
         let mut result = self;
         let constant_term = Term {
             coeff: rhs,
@@ -166,8 +166,8 @@ impl Add<i64> for Expression {
     }
 }
 
-/// i64 + Expression
-impl Add<Expression> for i64 {
+/// f32 + Expression
+impl Add<Expression> for f32 {
     type Output = Expression;
 
     fn add(self, rhs: Expression) -> Self::Output {
@@ -214,11 +214,11 @@ impl Add<Expression> for Term {
     }
 }
 
-/// Term x i64
-impl Mul<i64> for Term {
+/// Term x f32
+impl Mul<f32> for Term {
     type Output = Term;
 
-    fn mul(self, rhs: i64) -> Self::Output {
+    fn mul(self, rhs: f32) -> Self::Output {
         Term {
             coeff: self.coeff * rhs,
             ops: self.ops,
@@ -226,8 +226,8 @@ impl Mul<i64> for Term {
     }
 }
 
-/// i64 x Term
-impl Mul<Term> for i64 {
+/// f32 x Term
+impl Mul<Term> for f32 {
     type Output = Term;
 
     fn mul(self, rhs: Term) -> Self::Output {
@@ -264,18 +264,18 @@ impl<'a, 'b> Mul<&'b Term> for &'a Term {
     }
 }
 
-/// Expression x i64
-impl Mul<i64> for Expression {
+/// Expression x f32
+impl Mul<f32> for Expression {
     type Output = Expression;
 
-    fn mul(self, rhs: i64) -> Self::Output {
+    fn mul(self, rhs: f32) -> Self::Output {
         let new_terms: Vec<Term> = self.0.into_iter().map(|t| t * rhs).collect();
         Expression(new_terms)
     }
 }
 
-/// i64 x Expression
-impl Mul<Expression> for i64 {
+/// f32 x Expression
+impl Mul<Expression> for f32 {
     type Output = Expression;
 
     fn mul(self, rhs: Expression) -> Self::Output {
@@ -405,15 +405,15 @@ fn normal_order(term: Term) -> Expression {
 }
 
 fn consolidate(terms: Expression) -> Expression {
-    let mut consolidated: HashMap<Vec<Operator>, i64> = HashMap::new();
+    let mut consolidated: HashMap<Vec<Operator>, f32> = HashMap::new();
 
     for term in terms.0 {
-        *consolidated.entry(term.ops).or_insert(0) += term.coeff;
+        *consolidated.entry(term.ops).or_insert(0.0) += term.coeff;
     }
 
     let mut result: Vec<Term> = consolidated
         .into_iter()
-        .filter(|(_, c)| *c != 0)
+        .filter(|(_, c)| c.abs() >= 1e-6)
         .map(|(ops, coeff)| Term { coeff, ops })
         .collect();
     
@@ -427,7 +427,7 @@ fn consolidate(terms: Expression) -> Expression {
 
 fn main() {
     let input = Term {
-        coeff: 1, 
+        coeff: 1.0, 
         ops: vec![
             Operator::creation(1),
             Operator::annihilation(1),
@@ -441,7 +441,7 @@ fn main() {
         println!("{:?}", term);
     }
 
-    let input2 = Term {coeff: 1, 
+    let input2 = Term {coeff: 1.0, 
         ops: vec![
         Operator::annihilation(1),
         Operator::annihilation(2),
@@ -457,12 +457,12 @@ fn main() {
 
 
     let input3 = Expression(vec![
-        Term {coeff: 1, 
+        Term {coeff: 1.0, 
         ops: vec![
             Operator::annihilation(2),
             Operator::creation(1),
         ]},
-        Term {coeff: 1, 
+        Term {coeff: 1.0, 
         ops: vec![
             Operator::creation(1),
             Operator::annihilation(2),
@@ -478,7 +478,7 @@ fn main() {
     {
         let a1 = Term::density(1);
         let b1 = Term::density(2);
-        let input4 = a1 * b1 * 42;
+        let input4 = a1 * b1 * 42.0;
         println!("\nInput 4: {:?}", input4);
     }
 
@@ -492,12 +492,12 @@ fn main() {
     {
         let e1 = Term::density(1) + Term::density(2);
         let e2 = Term::density(2) + Term::density(3);
-        let input6 = e1 * e2 * 3;
+        let input6 = e1 * e2 * 3.0;
         println!("\nInput 6: {:?}", input6);
     }
 
     {
-        let hamiltonian = Expression::hopping(1, 2) + 0.5 * Term::two_body(1, 2, 2, 1);
-        println!("\nHamiltonian: {:?}", hamiltonian);
+        let hamiltonian = Expression::hopping(1, 2) + 0.5 * Term::density(1) * Term::density(2);
+        println!("\nHamiltonian: {:?}", normal_order_many(hamiltonian));
     }
 }
