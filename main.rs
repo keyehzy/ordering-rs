@@ -425,6 +425,82 @@ fn normal_order(term: Term) -> Expression {
 }
 
 
+/// A basis of N particles and M sites can be represented as a vector of terms.
+/// Each term represents a product of operators acting on the vacuum state.
+/// E.g., for N=2 and M=3, a basis state could be represented as:
+/// a+ (0) a+ (2) | 0 >
+/// which corresponds to two particles at sites 0 and 2.
+struct Basis {
+    n_particles: usize,
+    n_sites: usize,
+    states: Vec<Term>,
+}
+
+/// Because of bosonic statistics, we know that the size of the basis is given by:
+/// C(N + M - 1, N) = (N + M - 1)! / (N! * (M - 1)!)
+/// where C(n, k) is the binomial coefficient "n choose k".
+fn choose(n: usize, k: usize) -> usize {
+    if k > n {
+        return 0;
+    }
+    let mut res = 1;
+    for i in 0..k {
+        res = res * (n - i) / (i + 1);
+    }
+    res
+}
+
+/// Bosonic state normalization factor:
+/// For a state with occupation numbers n1, n2, ..., nM at sites 1 to M,
+/// the normalization factor is given by:
+/// 1 / sqrt(n1! * n2! * ... * nM!)
+fn factorial(n: usize) -> usize {
+    (1..=n).product()
+}
+
+fn bosonic_normalization(ops: &Vec<Operator>) -> f64 {
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for op in ops {
+        match op.op {
+            OpType::Creation => {
+                *counts.entry(op.index).or_insert(0) += 1;
+            },
+            OpType::Annihilation => panic!("Shouldn't have annihilation operator here.")
+        }
+    }
+    let mut norm = 1.0;
+    for &count in counts.values() {
+        norm *= factorial(count) as f64;
+    }
+    1.0 / norm.sqrt()
+}
+
+/// Construct the basis of N particles and M sites.
+fn construct_basis(n_particles: usize, n_sites: usize) -> Basis {
+    let n_states = choose(n_particles + n_sites - 1, n_particles);
+    let mut states = Vec::with_capacity(n_states);
+
+    fn generate_states(n_particles: usize, n_sites: usize, start_site: usize, current_state: &mut Vec<Operator>, states: &mut Vec<Term>) {
+        if n_particles == 0 {
+            let normalization = bosonic_normalization(current_state);
+            states.push(Term { coeff: normalization.into(), ops: current_state.clone() });
+            return;
+        }
+        for site in start_site..n_sites {
+            current_state.push(Operator::creation(site));
+            generate_states(n_particles - 1, n_sites, site, current_state, states);
+            current_state.pop();
+        }
+    }
+
+    let mut current_state = Vec::new();
+    generate_states(n_particles, n_sites, 0, &mut current_state, &mut states);
+
+    Basis { n_particles, n_sites, states }
+}
+
+
+
 
 /// Perform Fourier transform on a single operator in 1D
 fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
@@ -597,6 +673,30 @@ fn main() {
         println!("\nFourier Transform of full Hamiltonian:");
         for term in ft_ordered_hamiltonian.0 {
             println!("{:?}", term);
+        }
+    }
+
+    {
+        let basis = construct_basis(2, 3);
+        println!("\nBasis states for {} particles in {} sites:", basis.n_particles, basis.n_sites);
+        for (i, state) in basis.states.iter().enumerate() {
+            println!("State {}: {:?}", i, state);
+        }
+    }
+
+    {
+        let basis = construct_basis(3, 2);
+        println!("\nBasis states for {} particles in {} sites:", basis.n_particles, basis.n_sites);
+        for (i, state) in basis.states.iter().enumerate() {
+            println!("State {}: {:?}", i, state);
+        }
+    }
+
+    {
+        let basis = construct_basis(2, 4);
+        println!("\nBasis states for {} particles in {} sites:", basis.n_particles, basis.n_sites);
+        for (i, state) in basis.states.iter().enumerate() {
+            println!("State {}: {:?}", i, state);
         }
     }
 }
