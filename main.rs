@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::ops::{Add, Sub, Mul};
+use std::f32::consts::PI;
+use num_complex::{Complex, ComplexFloat};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum OpType {
@@ -56,14 +58,14 @@ impl PartialOrd for Operator {
 
 #[derive(Clone, PartialEq)]
 struct Term {
-    coeff: f32,
+    coeff: Complex<f32>,
     ops: Vec<Operator>,
 }
 
 impl Term {
     fn one_body(i: usize, j: usize) -> Term {
         Term {
-            coeff: 1.0,
+            coeff: 1.0.into(),
             ops: vec![
                 Operator::creation(i),
                 Operator::annihilation(j),
@@ -73,7 +75,7 @@ impl Term {
 
     fn two_body(i: usize, j: usize, k: usize, l: usize) -> Term {
         Term {
-            coeff: 1.0,
+            coeff: 1.0.into(),
             ops: vec![
                 Operator::creation(i),
                 Operator::creation(j),
@@ -90,7 +92,11 @@ impl Term {
 
 impl std::fmt::Debug for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} × {:?}", self.coeff, self.ops)
+        if (self.coeff.im - 0.0).abs() < 1e-6 {
+            write!(f, "{} × {:?}", self.coeff.re, self.ops)
+        } else {
+            write!(f, "{} × {:?}", self.coeff, self.ops)
+        }
     }
 }
 
@@ -98,13 +104,21 @@ impl std::fmt::Debug for Term {
 struct Expression(Vec<Term>);
 
 impl Expression {
+    fn new() -> Expression {
+        Expression(Vec::new())
+    }
+
+    fn scalar(c: Complex<f32>) -> Expression {
+        Expression(vec![Term { coeff: c, ops: vec![] }])
+    }
+
     pub fn consolidate(&mut self) {
         if self.0.is_empty() { return; }
 
-        let mut consolidated: HashMap<Vec<Operator>, f32> = HashMap::new();
+        let mut consolidated: HashMap<Vec<Operator>, Complex<f32>> = HashMap::new();
         
         for term in self.0.drain(..) {
-            *consolidated.entry(term.ops).or_insert(0.0) += term.coeff;
+            *consolidated.entry(term.ops).or_insert(0.0.into()) += term.coeff;
         }
 
         self.0 = consolidated
@@ -112,6 +126,8 @@ impl Expression {
             .filter(|(_, coeff)| coeff.abs() > 1e-6)
             .map(|(ops, coeff)| Term { coeff, ops })
             .collect();
+        
+        self.0.sort_by(|a, b| a.ops.len().cmp(&b.ops.len()));
     }
     
     fn hopping(i: usize, j: usize) -> Expression {
@@ -132,17 +148,21 @@ impl std::fmt::Debug for Expression {
 }
 
 
-
-
 impl From<f32> for Term {
     fn from(c: f32) -> Self {
+        Term { coeff: c.into(), ops: vec![] }
+    }
+}
+
+impl From<Complex<f32>> for Term {
+    fn from(c: Complex<f32>) -> Self {
         Term { coeff: c, ops: vec![] }
     }
 }
 
 impl From<Operator> for Term {
     fn from(op: Operator) -> Self {
-        Term { coeff: 1.0, ops: vec![op] }
+        Term { coeff: 1.0.into(), ops: vec![op] }
     }
 }
 
@@ -160,6 +180,12 @@ impl From<Operator> for Expression {
 
 impl From<f32> for Expression {
     fn from(c: f32) -> Self {
+        Expression(vec![Term::from(c)])
+    }
+}
+
+impl From<Complex<f32>> for Expression {
+    fn from(c: Complex<f32>) -> Self {
         Expression(vec![Term::from(c)])
     }
 }
@@ -357,7 +383,7 @@ fn commutes(op1: &Operator, op2: &Operator) -> bool {
 }
 
 fn normal_order_many(terms: Expression) -> Expression {
-    let mut result = Expression(Vec::new());
+    let mut result = Expression::new();
     for term in terms.0 {
         let mut normal_terms = normal_order(term);
         result.0.append(&mut normal_terms.0);
@@ -368,7 +394,7 @@ fn normal_order_many(terms: Expression) -> Expression {
 
 fn normal_order(term: Term) -> Expression {
     let mut queue = vec![term];
-    let mut result = Expression(Vec::new());
+    let mut result = Expression::new();
 
     'main_loop: while let Some(mut term) = queue.pop() {
         for i in 1..term.ops.len() {
@@ -403,10 +429,12 @@ fn normal_order(term: Term) -> Expression {
 }
 
 
+/// Perform Fourier transform on a single operator in 1D
 fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
     let mut terms = Vec::new();
+    let I = Complex::new(0.0, 1.0);
     for k in 0..n_sites {
-        let phase = (2.0 * std::f32::consts::PI * (op.index as f32) * (k as f32) / (n_sites as f32)).exp();
+        let phase = (2.0 * PI * I * (op.index as f32) * (k as f32) / (n_sites as f32)).exp();
         let new_op = match op.op {
             OpType::Creation     => Operator::creation(k),
             OpType::Annihilation => Operator::annihilation(k),
@@ -416,10 +444,31 @@ fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
     Expression(terms)
 }
 
+fn fourier_transform_term(term: Term, n_sites: usize) -> Expression {
+    let mut result = Expression::scalar(1.0.into());
+    for op in term.ops {
+        let ft_op = fourier_transform_operator(op, n_sites);
+        result = result * ft_op;
+    }
+    for t in &mut result.0 {
+        t.coeff *= term.coeff;
+    }
+    result
+}
+
+fn fourier_transform_expression(expr: Expression, n_sites: usize) -> Expression {
+    let mut result = Expression::new();
+    for term in expr.0 {
+        let ft_term = fourier_transform_term(term, n_sites);
+        result = result + ft_term;
+    }
+    result
+}
+
 
 fn main() {
     let input = Term {
-        coeff: 1.0, 
+        coeff: 1.0.into(), 
         ops: vec![
             Operator::creation(1),
             Operator::annihilation(1),
@@ -433,7 +482,7 @@ fn main() {
         println!("{:?}", term);
     }
 
-    let input2 = Term {coeff: 1.0, 
+    let input2 = Term {coeff: 1.0.into(), 
         ops: vec![
         Operator::annihilation(1),
         Operator::annihilation(2),
@@ -449,12 +498,12 @@ fn main() {
 
 
     let input3 = Expression(vec![
-        Term {coeff: 1.0, 
+        Term {coeff: 1.0.into(), 
         ops: vec![
             Operator::annihilation(2),
             Operator::creation(1),
         ]},
-        Term {coeff: 1.0, 
+        Term {coeff: 1.0.into(), 
         ops: vec![
             Operator::creation(1),
             Operator::annihilation(2),
@@ -505,6 +554,49 @@ fn main() {
         let ft_op = fourier_transform_operator(op, 4);
         println!("\nFourier Transform of {:?}:", op);
         for term in ft_op.0 {
+            println!("{:?}", term);
+        }
+    }
+
+    {
+        let term = Term::density(1);
+        let ft_term = fourier_transform_term(term, 4);
+        println!("\nFourier Transform of density term:");
+        for term in ft_term.0 {
+            println!("{:?}", term);
+        }
+    }
+
+    {
+        let expr = Term::density(1) + Term::density(2);
+        let ft_expr = fourier_transform_expression(expr, 4);
+        println!("\nFourier Transform of density expression:");
+        for term in ft_expr.0 {
+            println!("{:?}", term);
+        }
+    }
+
+    {
+        let expr = Expression::hopping(0, 1) + Expression::hopping(1, 2) + Expression::hopping(2, 0);
+        let ft_expr = fourier_transform_expression(expr, 3);
+        println!("\nFourier Transform of hopping expression (should be diagonal):");
+        for term in ft_expr.0 {
+            println!("{:?}", term);
+        }
+    }
+
+    {
+        let hamiltonian = 
+            Operator::creation(0) * (1.0 - Term::density(0)) * Operator::annihilation(1) + // hop from 0 to 1
+            Operator::creation(1) * (1.0 - Term::density(1)) * Operator::annihilation(0) +
+            Operator::creation(1) * (1.0 - Term::density(1)) * Operator::annihilation(2) + // hop from 1 to 2
+            Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(1) +
+            Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(0) + // hop from 2 to 0
+            Operator::creation(0) * (1.0 - Term::density(0)) * Operator::annihilation(2);
+        let normal_hamiltonian = normal_order_many(hamiltonian);
+        let ft_hamiltonian = fourier_transform_expression(normal_hamiltonian, 3);
+        println!("\nFourier Transform of full Hamiltonian:");
+        for term in ft_hamiltonian.0 {
             println!("{:?}", term);
         }
     }
