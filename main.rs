@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::ops::{Add, Sub, Mul};
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 use num_complex::{Complex, ComplexFloat};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -58,7 +58,7 @@ impl PartialOrd for Operator {
 
 #[derive(Clone, PartialEq)]
 struct Term {
-    coeff: Complex<f32>,
+    coeff: Complex<f64>,
     ops: Vec<Operator>,
 }
 
@@ -92,11 +92,7 @@ impl Term {
 
 impl std::fmt::Debug for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if (self.coeff.im - 0.0).abs() < 1e-6 {
-            write!(f, "{} × {:?}", self.coeff.re, self.ops)
-        } else {
-            write!(f, "{} × {:?}", self.coeff, self.ops)
-        }
+        write!(f, "({:.6}, {:.6}) × {:?}", self.coeff.re, self.coeff.im, self.ops)
     }
 }
 
@@ -108,14 +104,14 @@ impl Expression {
         Expression(Vec::new())
     }
 
-    fn scalar(c: Complex<f32>) -> Expression {
+    fn scalar(c: Complex<f64>) -> Expression {
         Expression(vec![Term { coeff: c, ops: vec![] }])
     }
 
     pub fn consolidate(&mut self) {
         if self.0.is_empty() { return; }
 
-        let mut consolidated: HashMap<Vec<Operator>, Complex<f32>> = HashMap::new();
+        let mut consolidated: HashMap<Vec<Operator>, Complex<f64>> = HashMap::new();
         
         for term in self.0.drain(..) {
             *consolidated.entry(term.ops).or_insert(0.0.into()) += term.coeff;
@@ -148,14 +144,14 @@ impl std::fmt::Debug for Expression {
 }
 
 
-impl From<f32> for Term {
-    fn from(c: f32) -> Self {
+impl From<f64> for Term {
+    fn from(c: f64) -> Self {
         Term { coeff: c.into(), ops: vec![] }
     }
 }
 
-impl From<Complex<f32>> for Term {
-    fn from(c: Complex<f32>) -> Self {
+impl From<Complex<f64>> for Term {
+    fn from(c: Complex<f64>) -> Self {
         Term { coeff: c, ops: vec![] }
     }
 }
@@ -178,14 +174,14 @@ impl From<Operator> for Expression {
     }
 }
 
-impl From<f32> for Expression {
-    fn from(c: f32) -> Self {
+impl From<f64> for Expression {
+    fn from(c: f64) -> Self {
         Expression(vec![Term::from(c)])
     }
 }
 
-impl From<Complex<f32>> for Expression {
-    fn from(c: Complex<f32>) -> Self {
+impl From<Complex<f64>> for Expression {
+    fn from(c: Complex<f64>) -> Self {
         Expression(vec![Term::from(c)])
     }
 }
@@ -219,7 +215,7 @@ impl<T: Into<Expression>> Add<T> for Operator {
     }
 }
 
-impl Add<Expression> for f32 {
+impl Add<Expression> for f64 {
     type Output = Expression;
 
     fn add(self, rhs: Expression) -> Self::Output {
@@ -227,7 +223,7 @@ impl Add<Expression> for f32 {
     }
 }
 
-impl Add<Term> for f32 {
+impl Add<Term> for f64 {
     type Output = Expression;
 
     fn add(self, rhs: Term) -> Self::Output {
@@ -267,7 +263,7 @@ impl<T: Into<Expression>> Sub<T> for Operator {
     }
 }
 
-impl Sub<Expression> for f32 {
+impl Sub<Expression> for f64 {
     type Output = Expression;
 
     fn sub(self, rhs: Expression) -> Self::Output {
@@ -279,7 +275,7 @@ impl Sub<Expression> for f32 {
     }
 }
 
-impl Sub<Term> for f32 {
+impl Sub<Term> for f64 {
     type Output = Expression;
 
     fn sub(self, rhs: Term) -> Self::Output {
@@ -343,7 +339,7 @@ impl<'a, 'b> Mul<&'b Term> for &'a Term {
     }
 }
 
-impl Mul<Expression> for f32 {
+impl Mul<Expression> for f64 {
     type Output = Expression;
 
     fn mul(self, rhs: Expression) -> Self::Output {
@@ -355,7 +351,7 @@ impl Mul<Expression> for f32 {
     }
 }
 
-impl Mul<Term> for f32 {
+impl Mul<Term> for f64 {
     type Output = Term;
  
     fn mul(self, rhs: Term) -> Self::Output {
@@ -429,17 +425,18 @@ fn normal_order(term: Term) -> Expression {
 }
 
 
+
 /// Perform Fourier transform on a single operator in 1D
 fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
     let mut terms = Vec::new();
     let I = Complex::new(0.0, 1.0);
     for k in 0..n_sites {
-        let phase = (2.0 * PI * I * (op.index as f32) * (k as f32) / (n_sites as f32)).exp();
-        let new_op = match op.op {
-            OpType::Creation     => Operator::creation(k),
-            OpType::Annihilation => Operator::annihilation(k),
+        let (sign, new_op) = match op.op {
+            OpType::Creation     => (-1.0, Operator::creation(k)),
+            OpType::Annihilation => ( 1.0, Operator::annihilation(k)),
         };
-        terms.push(Term { coeff: phase / (n_sites as f32).sqrt(), ops: vec![new_op] });
+        let phase = (sign * 2.0 * PI * I * (op.index as f64) * (k as f64) / (n_sites as f64)).exp();
+        terms.push(Term { coeff: phase / (n_sites as f64).sqrt(), ops: vec![new_op] });
     }
     Expression(terms)
 }
@@ -464,6 +461,7 @@ fn fourier_transform_expression(expr: Expression, n_sites: usize) -> Expression 
     }
     result
 }
+
 
 
 fn main() {
@@ -595,8 +593,9 @@ fn main() {
             Operator::creation(0) * (1.0 - Term::density(0)) * Operator::annihilation(2);
         let normal_hamiltonian = normal_order_many(hamiltonian);
         let ft_hamiltonian = fourier_transform_expression(normal_hamiltonian, 3);
+        let ft_ordered_hamiltonian = normal_order_many(ft_hamiltonian.clone());
         println!("\nFourier Transform of full Hamiltonian:");
-        for term in ft_hamiltonian.0 {
+        for term in ft_ordered_hamiltonian.0 {
             println!("{:?}", term);
         }
     }
