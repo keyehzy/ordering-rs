@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::cmp::Ordering;
-use std::ops::{Add, Mul};
+use std::ops::{Add, Sub, Mul};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum OpType {
@@ -98,6 +98,22 @@ impl std::fmt::Debug for Term {
 struct Expression(Vec<Term>);
 
 impl Expression {
+    pub fn consolidate(&mut self) {
+        if self.0.is_empty() { return; }
+
+        let mut consolidated: HashMap<Vec<Operator>, f32> = HashMap::new();
+        
+        for term in self.0.drain(..) {
+            *consolidated.entry(term.ops).or_insert(0.0) += term.coeff;
+        }
+
+        self.0 = consolidated
+            .into_iter()
+            .filter(|(_, coeff)| coeff.abs() > 1e-6)
+            .map(|(ops, coeff)| Term { coeff, ops })
+            .collect();
+    }
+    
     fn hopping(i: usize, j: usize) -> Expression {
         Expression(vec![
             Term::one_body(i, j),
@@ -115,144 +131,178 @@ impl std::fmt::Debug for Expression {
     }
 }
 
-/// Implementations of Add and Mul for Term and Expression
-/// Term + f32
-impl Add<f32> for Term {
-    type Output = Expression;
 
-    fn add(self, rhs: f32) -> Self::Output {
-        let constant_term = Term {
-            coeff: rhs,
-            ops: vec![],
-        };
-        Expression(vec![self, constant_term])
+
+
+impl From<f32> for Term {
+    fn from(c: f32) -> Self {
+        Term { coeff: c, ops: vec![] }
     }
 }
 
-/// f32 + Term
-impl Add<Term> for f32 {
-    type Output = Expression;
-
-    fn add(self, rhs: Term) -> Self::Output {
-        let constant_term = Term {
-            coeff: self,
-            ops: vec![],
-        };
-        Expression(vec![constant_term, rhs])
+impl From<Operator> for Term {
+    fn from(op: Operator) -> Self {
+        Term { coeff: 1.0, ops: vec![op] }
     }
 }
 
-/// Term + Term
-impl Add<Term> for Term {
-    type Output = Expression;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Expression(vec![self, rhs])
+impl From<Term> for Expression {
+    fn from(term: Term) -> Self {
+        Expression(vec![term])
     }
 }
 
-/// Expression + f32
-impl Add<f32> for Expression {
-    type Output = Expression;
-
-    fn add(self, rhs: f32) -> Self::Output {
-        let mut result = self;
-        let constant_term = Term {
-            coeff: rhs,
-            ops: vec![],
-        };
-        result.0.push(constant_term);
-        result
+impl From<Operator> for Expression {
+    fn from(op: Operator) -> Self {
+        Expression(vec![Term::from(op)])
     }
 }
 
-/// f32 + Expression
+impl From<f32> for Expression {
+    fn from(c: f32) -> Self {
+        Expression(vec![Term::from(c)])
+    }
+}
+
+
+
+
+impl<T: Into<Expression>> Add<T> for Expression {
+    type Output = Expression;
+
+    fn add(mut self, rhs: T) -> Self::Output {
+        self.0.extend(rhs.into().0);
+        self.consolidate();
+        self
+    }
+}
+
+impl<T: Into<Expression>> Add<T> for Term {
+    type Output = Expression;
+
+    fn add(self, rhs: T) -> Self::Output {
+        Expression::from(self) + rhs
+    }
+}
+
+impl<T: Into<Expression>> Add<T> for Operator {
+    type Output = Expression;
+
+    fn add(self, rhs: T) -> Self::Output {
+        Expression::from(self) + rhs
+    }
+}
+
 impl Add<Expression> for f32 {
     type Output = Expression;
 
     fn add(self, rhs: Expression) -> Self::Output {
-        let mut result = rhs;
-        let constant_term = Term {
-            coeff: self,
-            ops: vec![],
-        };
-        result.0.push(constant_term);
-        result
+        Expression::from(self) + rhs
     }
 }
 
-/// Expression + Expression
-impl Add<Expression> for Expression {
-    type Output = Expression;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        let mut result = self;
-        result.0.extend(rhs.0);
-        result
-    }
-}
-
-/// Expression + Term
-impl Add<Term> for Expression {
+impl Add<Term> for f32 {
     type Output = Expression;
 
     fn add(self, rhs: Term) -> Self::Output {
-        let mut result = self;
-        result.0.push(rhs);
-        result
+        Expression::from(self) + rhs
     }
 }
 
-/// Term + Expression
-impl Add<Expression> for Term {
+
+
+impl<T: Into<Expression>> Sub<T> for Expression {
     type Output = Expression;
 
-    fn add(self, rhs: Expression) -> Self::Output {
-        let mut result_terms = vec![self];
-        result_terms.extend(rhs.0);
-        Expression(result_terms)
-    }
-}
-
-/// Term x f32
-impl Mul<f32> for Term {
-    type Output = Term;
-
-    fn mul(self, rhs: f32) -> Self::Output {
-        Term {
-            coeff: self.coeff * rhs,
-            ops: self.ops,
+    fn sub(mut self, rhs: T) -> Self::Output {
+        let mut rhs_expr = rhs.into();
+        for term in &mut rhs_expr.0 {
+            term.coeff = -term.coeff;
         }
+        self.0.extend(rhs_expr.0);
+        self.consolidate();
+        self
     }
 }
 
-/// f32 x Term
-impl Mul<Term> for f32 {
-    type Output = Term;
+impl<T: Into<Expression>> Sub<T> for Term {
+    type Output = Expression;
 
-    fn mul(self, rhs: Term) -> Self::Output {
-        Term {
-            coeff: rhs.coeff * self,
-            ops: rhs.ops,
+    fn sub(self, rhs: T) -> Self::Output {
+        Expression::from(self) - rhs
+    }
+}
+
+impl<T: Into<Expression>> Sub<T> for Operator {
+    type Output = Expression;
+
+    fn sub(self, rhs: T) -> Self::Output {
+        Expression::from(self) - rhs
+    }
+}
+
+impl Sub<Expression> for f32 {
+    type Output = Expression;
+
+    fn sub(self, rhs: Expression) -> Self::Output {
+        let mut rhs_expr = rhs;
+        for term in &mut rhs_expr.0 {
+            term.coeff = -term.coeff;
         }
+        Expression::from(self) + rhs_expr
     }
 }
 
-/// Term x Term
-impl Mul<Term> for Term {
-    type Output = Term;
+impl Sub<Term> for f32 {
+    type Output = Expression;
 
-    fn mul(self, rhs: Self) -> Self::Output {
-        let mut new_ops = self.ops;
-        new_ops.extend_from_slice(&rhs.ops);
-        Term {
-            coeff: self.coeff * rhs.coeff,
-            ops: new_ops,
+    fn sub(self, rhs: Term) -> Self::Output {
+        let mut rhs_expr = Expression::from(rhs);
+        for term in &mut rhs_expr.0 {
+            term.coeff = -term.coeff;
         }
+        Expression::from(self) + rhs_expr
     }
 }
 
-/// &Term x &Term -> Term 
+
+
+
+impl<T: Into<Expression>> Mul<T> for Expression {
+    type Output = Expression;
+    
+    fn mul(self, rhs: T) -> Self::Output {
+        let rhs_expr = rhs.into();
+        let mut result_terms = Vec::new();
+        
+        for t1 in &self.0 {
+            for t2 in &rhs_expr.0 {
+                result_terms.push(t1 * t2);
+            }
+        }
+        
+        let mut result_expr = Expression(result_terms);
+        result_expr.consolidate();
+        result_expr
+    }
+}
+
+impl<T: Into<Expression>> Mul<T> for Term {
+    type Output = Expression;
+
+    fn mul(self, rhs: T) -> Self::Output {
+        Expression::from(self) * rhs
+    }
+}
+
+impl<T: Into<Expression>> Mul<T> for Operator {
+    type Output = Expression;
+
+    fn mul(self, rhs: T) -> Self::Output {
+        Expression::from(self) * rhs
+    }
+}
+
 impl<'a, 'b> Mul<&'b Term> for &'a Term {
     type Output = Term;
 
@@ -260,85 +310,32 @@ impl<'a, 'b> Mul<&'b Term> for &'a Term {
         let mut ops = Vec::with_capacity(self.ops.len() + rhs.ops.len());
         ops.extend_from_slice(&self.ops);
         ops.extend_from_slice(&rhs.ops);
-        Term { coeff: self.coeff * rhs.coeff, ops }
+        Term {
+            coeff: self.coeff * rhs.coeff,
+            ops,
+        }
     }
 }
 
-/// Expression x f32
-impl Mul<f32> for Expression {
-    type Output = Expression;
-
-    fn mul(self, rhs: f32) -> Self::Output {
-        let new_terms: Vec<Term> = self.0.into_iter().map(|t| t * rhs).collect();
-        Expression(new_terms)
-    }
-}
-
-/// f32 x Expression
 impl Mul<Expression> for f32 {
     type Output = Expression;
 
     fn mul(self, rhs: Expression) -> Self::Output {
-        let new_terms: Vec<Term> = rhs.0.into_iter().map(|t| t * self).collect();
-        Expression(new_terms)
-    }
-}
-
-/// Expression x Term
-impl Mul<Term> for Expression {
-    type Output = Expression;
-
-    fn mul(self, rhs: Term) -> Self::Output {
-        let rhs_ref = &rhs;
-        let new_terms: Vec<Term> = self.0.into_iter().map(|t| &t * rhs_ref).collect();
-        Expression(new_terms)
-    }
-}
-
-/// Term x Expression
-impl Mul<Expression> for Term {
-    type Output = Expression;
-
-    fn mul(self, rhs: Expression) -> Self::Output {
-        let lhs_ref = &self;
-        let new_terms: Vec<Term> = rhs.0.into_iter().map(|t| lhs_ref * &t).collect();
-        Expression(new_terms)
-    }
-}
-
-/// Expression x 'Term
-impl<'a> Mul<&'a Term> for Expression {
-    type Output = Expression;
-
-    fn mul(self, rhs: &'a Term) -> Self::Output {
-        Expression(self.0.into_iter().map(|t| &t * rhs).collect())
-    }
-}
-
-/// 'Term x Expression
-impl<'a> Mul<&'a Expression> for Term {
-    type Output = Expression;
-
-    fn mul(self, rhs: &'a Expression) -> Self::Output {
-        Expression(rhs.0.iter().map(|t| &self * t).collect())
-    }
-}
-
-/// Expression x Expression
-impl Mul for Expression {
-    type Output = Expression;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        let lhs_terms = &self.0;
-        let rhs_terms = &rhs.0;
-
-        let mut result_terms = Vec::with_capacity(lhs_terms.len() * rhs_terms.len());
-        for t1 in lhs_terms.iter() {
-            for t2 in rhs_terms.iter() {
-                result_terms.push(t1 * t2);
-            }
+        let mut result = rhs;
+        for term in &mut result.0 {
+            term.coeff *= self;
         }
-        Expression(result_terms)
+        result
+    }
+}
+
+impl Mul<Term> for f32 {
+    type Output = Term;
+ 
+    fn mul(self, rhs: Term) -> Self::Output {
+        let mut result = rhs;
+        result.coeff *= self;
+        result
     }
 }
 
@@ -360,7 +357,7 @@ fn commutes(op1: &Operator, op2: &Operator) -> bool {
 }
 
 fn normal_order_many(terms: Expression) -> Expression {
-    let mut result: Expression = Expression(Vec::new());
+    let mut result = Expression(Vec::new());
     for term in terms.0 {
         let mut normal_terms = normal_order(term);
         result.0.append(&mut normal_terms.0);
@@ -370,7 +367,7 @@ fn normal_order_many(terms: Expression) -> Expression {
 
 fn normal_order(term: Term) -> Expression {
     let mut queue = vec![term];
-    let mut result: Expression = Expression(Vec::new());
+    let mut result = Expression(Vec::new());
 
     'main_loop: while let Some(mut term) = queue.pop() {
         for i in 1..term.ops.len() {
@@ -400,7 +397,6 @@ fn normal_order(term: Term) -> Expression {
         }
         result.0.push(term);
     }
-
     consolidate(result)
 }
 
@@ -420,9 +416,6 @@ fn consolidate(terms: Expression) -> Expression {
     result.sort_by(|a, b| a.ops.len().cmp(&b.ops.len()));
     Expression(result)
 }
-
-
-
 
 
 fn main() {
@@ -499,5 +492,12 @@ fn main() {
     {
         let hamiltonian = Expression::hopping(1, 2) + 0.5 * Term::density(1) * Term::density(2);
         println!("\nHamiltonian: {:?}", normal_order_many(hamiltonian));
+    }
+
+    {
+        let hamiltonian = 
+        Operator::creation(1) * (1.0 - Term::density(1)) * Operator::annihilation(2) +
+        Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(1);
+        println!("\nHamiltonian 2: {:?}", normal_order_many(hamiltonian));
     }
 }
