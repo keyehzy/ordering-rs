@@ -362,7 +362,8 @@ fn normal_order_many(terms: Expression) -> Expression {
         let mut normal_terms = normal_order(term);
         result.0.append(&mut normal_terms.0);
     }
-    consolidate(result)
+    result.consolidate();
+    result
 }
 
 fn normal_order(term: Term) -> Expression {
@@ -397,24 +398,22 @@ fn normal_order(term: Term) -> Expression {
         }
         result.0.push(term);
     }
-    consolidate(result)
+    result.consolidate();
+    result
 }
 
-fn consolidate(terms: Expression) -> Expression {
-    let mut consolidated: HashMap<Vec<Operator>, f32> = HashMap::new();
 
-    for term in terms.0 {
-        *consolidated.entry(term.ops).or_insert(0.0) += term.coeff;
+fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
+    let mut terms = Vec::new();
+    for k in 0..n_sites {
+        let phase = (2.0 * std::f32::consts::PI * (op.index as f32) * (k as f32) / (n_sites as f32)).exp();
+        let new_op = match op.op {
+            OpType::Creation     => Operator::creation(k),
+            OpType::Annihilation => Operator::annihilation(k),
+        };
+        terms.push(Term { coeff: phase / (n_sites as f32).sqrt(), ops: vec![new_op] });
     }
-
-    let mut result: Vec<Term> = consolidated
-        .into_iter()
-        .filter(|(_, c)| c.abs() >= 1e-6)
-        .map(|(ops, coeff)| Term { coeff, ops })
-        .collect();
-    
-    result.sort_by(|a, b| a.ops.len().cmp(&b.ops.len()));
-    Expression(result)
+    Expression(terms)
 }
 
 
@@ -499,5 +498,14 @@ fn main() {
         Operator::creation(1) * (1.0 - Term::density(1)) * Operator::annihilation(2) +
         Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(1);
         println!("\nHamiltonian 2: {:?}", normal_order_many(hamiltonian));
+    }
+
+    {
+        let op = Operator::creation(1);
+        let ft_op = fourier_transform_operator(op, 4);
+        println!("\nFourier Transform of {:?}:", op);
+        for term in ft_op.0 {
+            println!("{:?}", term);
+        }
     }
 }
