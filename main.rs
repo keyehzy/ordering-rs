@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::ops::{Add, Sub, Mul};
 use std::f64::consts::PI;
 use num_complex::{Complex, ComplexFloat};
+use faer::Mat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum OpType {
@@ -23,6 +24,13 @@ impl Operator {
 
     fn annihilation(index: usize) -> Operator {
         Operator { op: OpType::Annihilation, index }
+    }
+
+    fn adjoint(&self) -> Operator {
+        match self.op {
+            OpType::Creation     => Operator::annihilation(self.index),
+            OpType::Annihilation => Operator::creation(self.index),
+        }
     }
 }
 
@@ -63,6 +71,18 @@ struct Term {
 }
 
 impl Term {
+    fn adjoint(&self) -> Term {
+        let mut new_ops = self.ops.clone();
+        new_ops.reverse();
+        for op in &mut new_ops {
+            *op = op.adjoint();
+        }
+        Term {
+            coeff: self.coeff.conj(),
+            ops: new_ops,
+        }
+    }
+    
     fn one_body(i: usize, j: usize) -> Term {
         Term {
             coeff: 1.0.into(),
@@ -106,6 +126,14 @@ impl Expression {
 
     fn scalar(c: Complex<f64>) -> Expression {
         Expression(vec![Term { coeff: c, ops: vec![] }])
+    }
+
+    fn adjoint(&self) -> Expression {
+        let mut new_terms = Vec::with_capacity(self.0.len());
+        for term in &self.0 {
+            new_terms.push(term.adjoint());
+        }
+        Expression(new_terms)
     }
 
     pub fn consolidate(&mut self) {
@@ -378,9 +406,9 @@ fn commutes(op1: &Operator, op2: &Operator) -> bool {
     }
 }
 
-fn normal_order_many(terms: Expression) -> Expression {
+fn normal_order_many(terms: &Expression) -> Expression {
     let mut result = Expression::new();
-    for term in terms.0 {
+    for term in &terms.0 {
         let mut normal_terms = normal_order(term);
         result.0.append(&mut normal_terms.0);
     }
@@ -388,8 +416,8 @@ fn normal_order_many(terms: Expression) -> Expression {
     result
 }
 
-fn normal_order(term: Term) -> Expression {
-    let mut queue = vec![term];
+fn normal_order(term: &Term) -> Expression {
+    let mut queue = vec![term.clone()];
     let mut result = Expression::new();
 
     'main_loop: while let Some(mut term) = queue.pop() {
@@ -500,10 +528,29 @@ fn construct_basis(n_particles: usize, n_sites: usize) -> Basis {
 }
 
 
+/// Computes matrix elements of an operator using a basis.
+/// Naively, we can compute <bra|O|ket> for all bra and ket in the basis.
+/// Using the normal ordering function, we can compute O|ket> and then take the inner product with <bra|,
+/// the matrix element is then given by the coefficient of the vacuum state in the resulting expression.
+fn compute_matrix_elements(basis: &Basis, operator: &Expression) -> Mat<Complex<f64>> {
+    let n_states = basis.states.len();
+    let mut matrix = Mat::zeros(n_states, n_states);
+    for (i, bra) in basis.states.iter().enumerate() {
+        for (j, ket) in basis.states.iter().enumerate() {
+            let product = bra.adjoint() * operator.clone() * ket.clone();
+            let normal_ordered = normal_order_many(&product);
+            matrix[(i, j)] = normal_ordered.0.iter()
+                .find(|term| term.ops.is_empty())
+                .map_or(Complex::new(0.0, 0.0), |term| term.coeff);
+        }
+    }
+    matrix
+}
+
 
 
 /// Perform Fourier transform on a single operator in 1D
-fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
+fn fourier_transform_operator(op: &Operator, n_sites: usize) -> Expression {
     let mut terms = Vec::new();
     let I = Complex::new(0.0, 1.0);
     for k in 0..n_sites {
@@ -517,9 +564,9 @@ fn fourier_transform_operator(op: Operator, n_sites: usize) -> Expression {
     Expression(terms)
 }
 
-fn fourier_transform_term(term: Term, n_sites: usize) -> Expression {
+fn fourier_transform_term(term: &Term, n_sites: usize) -> Expression {
     let mut result = Expression::scalar(1.0.into());
-    for op in term.ops {
+    for op in &term.ops {
         let ft_op = fourier_transform_operator(op, n_sites);
         result = result * ft_op;
     }
@@ -529,15 +576,87 @@ fn fourier_transform_term(term: Term, n_sites: usize) -> Expression {
     result
 }
 
-fn fourier_transform_expression(expr: Expression, n_sites: usize) -> Expression {
+fn fourier_transform_expression(expr: &Expression, n_sites: usize) -> Expression {
     let mut result = Expression::new();
-    for term in expr.0 {
-        let ft_term = fourier_transform_term(term, n_sites);
+    for term in &expr.0 {
+        let ft_term = fourier_transform_term(&term, n_sites);
         result = result + ft_term;
     }
     result
 }
 
+
+
+
+
+/// Building blocks for common Hamiltonians.
+struct BuildingBlocks;
+
+impl BuildingBlocks {    
+    fn chemical_potential_1d(mu: f64, n_sites: usize) -> Expression {
+        let mut expr = Expression::new();
+        for i in 0..n_sites {
+            let density_i = Term::density(i);
+            expr = expr + density_i * (-mu);
+        }
+        expr
+    }
+    
+    fn hopping_1d(t: f64, n_sites: usize) -> Expression {
+        let mut expr = Expression::new();
+        for i in 0..n_sites {
+            let j = (i + 1) % n_sites;
+            expr = expr + Expression::hopping(i, j) * (-t);
+        }
+        expr
+    }
+
+    fn hubbard_u_1d(u: f64, n_sites: usize) -> Expression {
+        let mut expr = Expression::new();
+        for i in 0..n_sites {
+            let density_i = Term::density(i);
+            expr = expr + (density_i.clone() * (density_i - 1.0)) * (u / 2.0);
+        }
+        expr
+    }
+}
+
+
+
+
+/// Model trait.
+/// Every model should provide a method to generate its Hamiltonian as an Expression.
+trait Model {
+    fn hamiltonian(&self) -> Expression;
+}
+
+struct Chain {
+    t: f64,
+    mu: f64,
+    n_sites: usize,
+}
+
+impl Model for Chain {
+    fn hamiltonian(&self) -> Expression {
+        BuildingBlocks::hopping_1d(self.t, self.n_sites) +
+        BuildingBlocks::chemical_potential_1d(self.mu, self.n_sites)
+    }
+}
+
+struct BoseHubbard1D {
+    t: f64,
+    u: f64,
+    mu: f64,
+    n_sites: usize,
+}
+
+impl Model for BoseHubbard1D {
+    fn hamiltonian(&self) -> Expression {
+        BuildingBlocks::hopping_1d(self.t, self.n_sites) +
+        BuildingBlocks::hubbard_u_1d(self.u, self.n_sites) +
+        BuildingBlocks::chemical_potential_1d(self.mu, self.n_sites)
+    }
+}
 
 
 fn main() {
@@ -549,7 +668,7 @@ fn main() {
             Operator::creation(1),
     ]};
 
-    let result = normal_order(input.clone());
+    let result = normal_order(&input);
     println!("Input: {:?}", input);
     println!("Output:");
     for term in result.0 {
@@ -565,7 +684,7 @@ fn main() {
     ]};
 
     println!("\nInput 2: {:?}", input2);
-    let result2 = normal_order(input2);
+    let result2 = normal_order(&input2);
     for term in result2.0 {
         println!("{:?}", term);
     }
@@ -585,7 +704,7 @@ fn main() {
     ]);
 
     println!("\nInput 3: {:?}", input3);
-    let result3 = normal_order_many(input3);
+    let result3 = normal_order_many(&input3);
     for term in result3.0 {
         println!("{:?}", term);
     }
@@ -613,19 +732,19 @@ fn main() {
 
     {
         let hamiltonian = Expression::hopping(1, 2) + 0.5 * Term::density(1) * Term::density(2);
-        println!("\nHamiltonian: {:?}", normal_order_many(hamiltonian));
+        println!("\nHamiltonian: {:?}", normal_order_many(&hamiltonian));
     }
 
     {
         let hamiltonian = 
         Operator::creation(1) * (1.0 - Term::density(1)) * Operator::annihilation(2) +
         Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(1);
-        println!("\nHamiltonian 2: {:?}", normal_order_many(hamiltonian));
+        println!("\nHamiltonian 2: {:?}", normal_order_many(&hamiltonian));
     }
 
     {
         let op = Operator::creation(1);
-        let ft_op = fourier_transform_operator(op, 4);
+        let ft_op = fourier_transform_operator(&op, 4);
         println!("\nFourier Transform of {:?}:", op);
         for term in ft_op.0 {
             println!("{:?}", term);
@@ -634,7 +753,7 @@ fn main() {
 
     {
         let term = Term::density(1);
-        let ft_term = fourier_transform_term(term, 4);
+        let ft_term = fourier_transform_term(&term, 4);
         println!("\nFourier Transform of density term:");
         for term in ft_term.0 {
             println!("{:?}", term);
@@ -643,7 +762,7 @@ fn main() {
 
     {
         let expr = Term::density(1) + Term::density(2);
-        let ft_expr = fourier_transform_expression(expr, 4);
+        let ft_expr = fourier_transform_expression(&expr, 4);
         println!("\nFourier Transform of density expression:");
         for term in ft_expr.0 {
             println!("{:?}", term);
@@ -652,7 +771,7 @@ fn main() {
 
     {
         let expr = Expression::hopping(0, 1) + Expression::hopping(1, 2) + Expression::hopping(2, 0);
-        let ft_expr = fourier_transform_expression(expr, 3);
+        let ft_expr = fourier_transform_expression(&expr, 3);
         println!("\nFourier Transform of hopping expression (should be diagonal):");
         for term in ft_expr.0 {
             println!("{:?}", term);
@@ -667,9 +786,9 @@ fn main() {
             Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(1) +
             Operator::creation(2) * (1.0 - Term::density(2)) * Operator::annihilation(0) + // hop from 2 to 0
             Operator::creation(0) * (1.0 - Term::density(0)) * Operator::annihilation(2);
-        let normal_hamiltonian = normal_order_many(hamiltonian);
-        let ft_hamiltonian = fourier_transform_expression(normal_hamiltonian, 3);
-        let ft_ordered_hamiltonian = normal_order_many(ft_hamiltonian.clone());
+        let normal_hamiltonian = normal_order_many(&hamiltonian);
+        let ft_hamiltonian = fourier_transform_expression(&normal_hamiltonian, 3);
+        let ft_ordered_hamiltonian = normal_order_many(&ft_hamiltonian);
         println!("\nFourier Transform of full Hamiltonian:");
         for term in ft_ordered_hamiltonian.0 {
             println!("{:?}", term);
@@ -698,5 +817,41 @@ fn main() {
         for (i, state) in basis.states.iter().enumerate() {
             println!("State {}: {:?}", i, state);
         }
+    }
+
+    {
+        let basis = construct_basis(1, 4);
+        println!("\nBasis states for {} particles in {} sites:", basis.n_particles, basis.n_sites);
+        for (i, state) in basis.states.iter().enumerate() {
+            println!("State {}: {:?}", i, state);
+        }
+        
+        let model = Chain { t: 1.0, mu: 0.0, n_sites: basis.n_sites };
+        let hamiltonian = model.hamiltonian();
+        let matrix = compute_matrix_elements(&basis, &hamiltonian);
+        println!("\nHamiltonian matrix:");
+        println!("{:?}", matrix);
+        
+        let eig = matrix.self_adjoint_eigenvalues(faer::Side::Lower).unwrap();
+        println!("\nEigenvalues:");
+        println!("{:?}", eig);
+    }
+
+    {
+        let basis = construct_basis(2, 4);
+        println!("\nBasis states for {} particles in {} sites:", basis.n_particles, basis.n_sites);
+        for (i, state) in basis.states.iter().enumerate() {
+            println!("State {}: {:?}", i, state);
+        }
+        
+        let model = BoseHubbard1D { t: 1.0, u: 2.0, mu: 0.0, n_sites: basis.n_sites };
+        let hamiltonian = model.hamiltonian();
+        let matrix = compute_matrix_elements(&basis, &hamiltonian);
+        println!("\nHamiltonian matrix:");
+        println!("{:?}", matrix);
+        
+        let eig = matrix.self_adjoint_eigenvalues(faer::Side::Lower).unwrap();
+        println!("\nEigenvalues:");
+        println!("{:?}", eig);
     }
 }
