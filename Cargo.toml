@@ -11,4 +11,4 @@ num-complex = "0.4.6"
 
 [[bin]]
 name = "ordering-rs"
-path = "main.rs"
+path = "src/main.rs"
